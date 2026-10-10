@@ -2,7 +2,7 @@
 
 mod adb;
 
-use adb::{distance_m, kmh_to_mps, Adb, Device, LatLng, Status, MAX_JUMP_M};
+use adb::{distance_m, kmh_to_mps, parse_host_port, parse_pairing_code, Adb, Device, LatLng, Status, MAX_JUMP_M};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Manager, RunEvent};
@@ -26,6 +26,37 @@ fn adb_for(serial: &str) -> Result<Adb, String> {
 #[tauri::command]
 async fn list_devices() -> Result<Vec<Device>, String> {
     blocking(|| Adb::new(None)?.devices()).await
+}
+
+/// ワイヤレスデバッグのペア設定（初回のみ）。
+#[tauri::command]
+async fn pair_device(host: String, code: String) -> Result<String, String> {
+    blocking(move || {
+        let host = parse_host_port(&host)?;
+        let code = parse_pairing_code(&code)?;
+        Adb::new(None)?.pair(&host, &code)
+    })
+    .await
+}
+
+/// ワイヤレスデバッグで接続し、端末一覧に出るシリアル（host:port）を返す。
+#[tauri::command]
+async fn connect_device(host: String) -> Result<String, String> {
+    blocking(move || {
+        let host = parse_host_port(&host)?;
+        Adb::new(None)?.connect(&host)?;
+        Ok(host)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn disconnect_device(host: String) -> Result<String, String> {
+    blocking(move || {
+        let host = parse_host_port(&host)?;
+        Adb::new(None)?.disconnect(&host)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -159,6 +190,9 @@ fn main() {
         .manage(Mutex::new(Session { serial: None, stop_on_exit: true }))
         .invoke_handler(tauri::generate_handler![
             list_devices,
+            pair_device,
+            connect_device,
+            disconnect_device,
             get_status,
             setup_device,
             set_position,

@@ -262,3 +262,14 @@ dialog::backdrop {
 .dialog-buttons {
   justify-content: flex-end;
 }
+
+h3 {
+  margin: 10px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#wireless button#disconnect-btn {
+  width: 100%;
+  margin-top: 6px;
+}

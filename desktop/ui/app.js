@@ -203,6 +203,65 @@ $("setup-device").onclick = () =>
 
 $("stop-on-exit").onchange = syncSession;
 
+// ---- ワイヤレス接続 ----
+
+const LAST_HOST_KEY = "locationlab.lastWirelessHost";
+
+function isWirelessSerial(serial) {
+  return /^[\w.-]+:\d+$/.test(serial ?? "");
+}
+
+function rememberHost(host) {
+  try {
+    localStorage.setItem(LAST_HOST_KEY, host);
+  } catch {
+    // 保存できなくても動作に影響しない
+  }
+}
+
+try {
+  $("connect-host").value = localStorage.getItem(LAST_HOST_KEY) ?? "";
+} catch {
+  // 同上
+}
+
+$("pair-btn").onclick = () =>
+  run(async () => {
+    const out = await invoke("pair_device", { host: $("pair-host").value, code: $("pair-code").value });
+    $("pair-code").value = "";
+    // ペア設定の IP を接続欄に流用（ポートは別なので入力を促す）
+    const ip = $("pair-host").value.trim().split(":")[0];
+    if (ip && !$("connect-host").value.startsWith(ip + ":")) $("connect-host").value = ip + ":";
+    showMessage(`${out}\n続けて「2. 接続」で接続用のポートを入力してください。`);
+    $("connect-host").focus();
+    return "keep-message";
+  });
+
+$("connect-btn").onclick = () =>
+  run(async () => {
+    const serial = await invoke("connect_device", { host: $("connect-host").value });
+    rememberHost(serial);
+    state.serial = serial;
+    state.centeredOnce = false;
+    // 接続直後は offline のことがあるので少し待ってから一覧を取り直す
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 600));
+      const devices = await invoke("list_devices");
+      if (devices.some((d) => d.serial === serial && d.state === "device")) break;
+    }
+    await refreshDevices();
+    if (state.serial !== serial) throw new Error(`${serial} に接続しましたが、端末が応答しません。端末の画面を確認してください。`);
+  }, "ワイヤレスで接続しました");
+
+$("disconnect-btn").onclick = () =>
+  run(async () => {
+    await invoke("disconnect_device", { host: state.serial });
+    await refreshDevices();
+  }, "切断しました。端末上のシミュレーションは継続しています（停止するには先に「停止して通常位置に戻す」）。");
+
+$("pair-code").addEventListener("keydown", (e) => e.key === "Enter" && $("pair-btn").click());
+$("connect-host").addEventListener("keydown", (e) => e.key === "Enter" && $("connect-btn").click());
+
 async function run(fn, successMessage) {
   if (state.busy) return;
   state.busy = true;
@@ -230,6 +289,10 @@ function updateButtons() {
   $("apply-speed").disabled = !connected || !["WALKING", "PAUSED"].includes(s);
   $("stop").disabled = !connected || !s || s === "NOT_RUNNING" || s === "IDLE";
   $("setup-device").disabled = !connected;
+  $("disconnect-btn").hidden = !isWirelessSerial(state.serial);
+  $("disconnect-btn").disabled = state.busy;
+  $("pair-btn").disabled = state.busy;
+  $("connect-btn").disabled = state.busy;
 }
 
 /** WebView 標準の confirm() に頼らないアプリ内確認ダイアログ。 */
@@ -260,7 +323,8 @@ async function refreshDevices() {
       const o = document.createElement("option");
       o.value = d.serial;
       o.disabled = d.state !== "device";
-      o.textContent = `${d.model ?? d.serial}${d.state !== "device" ? `（${d.state}）` : ""}`;
+      const via = isWirelessSerial(d.serial) || d.serial.includes("._adb-tls-connect.") ? " · Wi-Fi" : "";
+      o.textContent = `${d.model ?? d.serial}${via}${d.state !== "device" ? `（${d.state}）` : ""}`;
       select.append(o);
     }
     const usable = devices.filter((d) => d.state === "device");
