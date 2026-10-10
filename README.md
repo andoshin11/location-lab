@@ -1,66 +1,151 @@
 # location-lab
 
 Mac に接続した Android 端末の位置情報を、Android 公式の mock location（テストプロバイダ）機構でシミュレーションするツールです。
+地図で目的地を指定すると、現在地から目的地まで **徒歩の速度で少しずつ移動** させることができます。
 
-- `android/` — 端末側の補助アプリ（Kotlin、外部ライブラリ依存なし）
-- `desktop/` — Mac の GUI アプリ（Tauri 2。地図で経路を指定して操作）
-- `mac/locationlab.py` — Mac から adb 経由で操作する CLI（Python 3 標準ライブラリのみ）
+| ディレクトリ | 内容 |
+|---|---|
+| `android/` | 端末にインストールする補助アプリ（Kotlin、外部ライブラリ依存なし） |
+| `desktop/` | Mac の GUI アプリ（Tauri 2。地図で操作） |
+| `mac/locationlab.py` | Mac から操作する CLI（Python 3 標準ライブラリのみ） |
 
-## できること
+```
+ Mac (GUI / CLI) ──USB / adb──▶ Android 端末: Location Lab アプリ ──▶ mock location ──▶ 各アプリ
+```
 
-- 指定座標への固定（`set`）
-- **徒歩移動シミュレーション**（`walk`）: 現在位置から目的地（複数の経由地・GPX 可）まで、指定速度（既定 5 km/h）で 1 秒ごとに位置を更新しながら移動。進行方向・速度も Location に設定します。
-  - 出発地は「現在のシミュレーション位置」→「mock 開始前の実際の最終位置」→ `--from` の指定、の順で決まります。
-  - 一時停止・再開・速度変更に対応。到着後はその地点を保持します。
-- `set` で現在のシミュレーション位置から 100 m 超の瞬間移動になる場合は拒否します（`--force` で許可）。
-- 停止（`stop`）でテストプロバイダを削除し、通常の位置取得に戻します。
-
-## 必要なもの
-
-- Android 8.0 (API 26) 以上の端末、USB デバッグ有効
-- Mac: `adb`（`brew install --cask android-platform-tools`）、Python 3.9+
-- ビルドする場合: JDK 17、Android SDK (platform 34)
+---
 
 ## セットアップ
 
-```sh
-# 1. APK をビルド
-cd android && ./gradlew assembleDebug && cd ..
+初回は 20〜30 分ほどかかります（ダウンロード時間を含む）。
 
-# 2. インストールして権限付与 + 「仮の現在地情報アプリ」に設定
-./mac/locationlab.py setup --apk android/app/build/outputs/apk/debug/app-debug.apk
+### 1. Mac に必要なツールを入れる
+
+[Homebrew](https://brew.sh/) が入っている前提です。
+
+```sh
+# adb（端末との通信）
+brew install --cask android-platform-tools
+
+# Android アプリのビルドに必要な JDK 17 と Android SDK
+brew install --cask temurin@17 android-commandlinetools
+
+# GUI アプリのビルドに必要な Node.js
+brew install node
+
+# GUI アプリのビルドに必要な Rust（公式インストーラ）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ```
 
-`setup` は `adb shell appops set ... android:mock_location allow` を実行します。端末上で手動設定する場合は「開発者向けオプション → 仮の現在地情報アプリを選択 → Location Lab」です。
+Android SDK の場所を環境変数に設定し、必要なパッケージを入れます。
 
-## Mac GUI（desktop/）
+```sh
+# zsh の場合
+echo 'export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools' >> ~/.zshrc
+source ~/.zshrc
+# fish の場合
+# set -Ux ANDROID_HOME /opt/homebrew/share/android-commandlinetools
 
-地図（OpenStreetMap）をクリックして目的地・経由地を指定し、徒歩移動・固定・一時停止・停止を操作できます。
+yes | sdkmanager --licenses
+sdkmanager "platforms;android-34" "build-tools;34.0.0"
+```
 
-- 状態（移動中 / 一時停止 / 固定中 / 到着 / エラー）、現在位置、残り距離・所要時間を表示し、地図上のマーカーが移動に追従します
-- 経路の距離と所要時間を開始前にプレビュー。「最初の点を出発地にする」で出発地も地図で指定可能
-- GPX 読込、座標の直接入力、速度プリセット（4 / 5 / 6 km/h）、移動中の速度変更
-- 100 m 超の瞬間移動になる「固定」は確認ダイアログを表示
-- 「端末セットアップ」で APK インストール・権限付与・mock 位置アプリ設定
-- 「終了時にシミュレーションを解除」（既定 ON）: アプリ終了時に端末の mock を解除して通常位置に戻します
+> Android Studio が入っている場合は、`temurin@17`・`android-commandlinetools`・`sdkmanager` の手順は不要です。
+> `ANDROID_HOME` を `~/Library/Android/sdk` に設定してください。
 
-Electron ではなく Tauri を採用しています（OS 標準の WebView を使うため、Chromium を同梱する Electron よりアプリサイズ・メモリ使用量が小さい）。
-実測では .app が約 3.3 MB、移動中の本体プロセスが約 80 MB / CPU ほぼ 0%（WebKit プロセス別）でした。
+新しいターミナルを開いて、次のコマンドがすべてバージョンを表示すれば OK です。
 
-### ビルド・起動
+```sh
+adb version && java -version && cargo --version && node --version
+```
 
-Rust（`rustup`）と Node.js が必要です。
+### 2. Android 端末の準備（初回のみ）
+
+1. **開発者向けオプションを有効にする**
+   「設定 → デバイス情報（端末情報）→ ビルド番号」を 7 回タップします。
+   メーカーによっては「ソフトウェア情報」の中にあります。
+2. **USB デバッグを有効にする**
+   「設定 → システム → 開発者向けオプション → USB デバッグ」を ON にします。
+3. **Mac と USB で接続する**
+   端末に「USB デバッグを許可しますか？」と表示されたら、「このパソコンからの USB デバッグを常に許可する」にチェックして許可します。
+4. **接続を確認する**
+   次のコマンドで `device` と表示されれば OK です。`unauthorized` と出る場合は、手順 3 の許可を確認してください。
+
+   ```sh
+   adb devices
+   # List of devices attached
+   # XXXXXXXX   device
+   ```
+
+### 3. Android アプリをビルドする
+
+```sh
+git clone https://github.com/andoshin11/location-lab.git
+cd location-lab/android
+./gradlew assembleDebug
+# → android/app/build/outputs/apk/debug/app-debug.apk ができます
+cd ..
+```
+
+### 4. Mac の GUI アプリをビルドする
 
 ```sh
 cd desktop
 npm install
-npm run dev      # 開発起動
-npm run build    # src-tauri/target/release/bundle/ に .app / .dmg を生成
+npm run build
+# → desktop/src-tauri/target/release/bundle/macos/Location Lab.app ができます
+open "src-tauri/target/release/bundle/macos/Location Lab.app"
+cd ..
 ```
 
-adb は PATH、`~/Library/Android/sdk/platform-tools`、Homebrew の場所から自動で探します。見つからない場合は環境変数 `LOCATIONLAB_ADB` に adb のパスを指定してください（Finder から起動した .app はシェルの PATH を引き継ぎません）。
+`Location Lab.app` は「アプリケーション」フォルダにドラッグして使っても構いません。
+署名していないため、初回起動時に警告が出た場合は Finder で右クリック →「開く」を選んでください。
 
-## CLI の使い方
+開発中は `npm run dev` でビルドせずに起動できます。
+
+### 5. 端末にアプリを入れて設定する（GUI から）
+
+1. GUI の左上「端末」に、接続した端末が表示されていることを確認します。
+2. 「端末セットアップ」を開き、APK のパスに次を入力して「セットアップ実行」を押します。
+
+   ```
+   /path/to/location-lab/android/app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+   これで次の 3 つがまとめて行われます。
+   - アプリのインストール
+   - 位置情報の権限付与（現在地を出発地として使うため）
+   - 「仮の現在地情報アプリ」への設定
+
+> CLI では `./mac/locationlab.py setup --apk android/app/build/outputs/apk/debug/app-debug.apk` で同じことができます。
+> 端末上で手動設定する場合は「開発者向けオプション → 仮の現在地情報アプリを選択 → Location Lab」です。
+
+これでセットアップは完了です。
+
+---
+
+## 使い方（GUI）
+
+1. **目的地を指定する**
+   地図をクリックすると目的地が追加されます。続けてクリックした地点は経由地になり、その順に歩きます。
+   - 座標を直接入力する場合は「緯度,経度」欄に入力して「追加」を押します。
+   - GPX ファイルの経路を使う場合は「GPX 読込」を押します。
+   - 出発地も指定したい場合は「最初の点を出発地にする」にチェックします。チェックしなければ端末の現在地から出発します。
+2. **速度を選ぶ**
+   既定は 5 km/h（徒歩）です。距離と所要時間が「経路」欄に表示されます。
+3. **「徒歩で移動開始」を押す**
+   端末の位置が 1 秒ごとに更新され、地図上の青いマーカーが動きます。
+   - 「一時停止」「再開」や、移動中の速度「変更」ができます。
+   - 到着すると、その場所に留まります。
+4. **「停止して通常位置に戻す」を押す**
+   シミュレーションを解除し、端末は本来の位置情報に戻ります。
+
+その他の操作:
+- **最後の点に固定**: 指定した地点に位置を固定します。現在のシミュレーション位置から 100 m を超える瞬間移動になる場合は、確認ダイアログが出ます。
+- **終了時にシミュレーションを解除**: ON（既定）なら、GUI を終了したときに自動で解除されます。OFF にすると、GUI を閉じても端末上で移動・固定が続きます。
+- **端末側からの停止**: 通知の「Stop & restore」や、端末の Location Lab アプリの画面からも停止できます。
+
+## 使い方（CLI）
 
 ```sh
 ./mac/locationlab.py walk 35.681236,139.767125 --follow        # 現在位置から東京駅まで 5 km/h で歩く
@@ -69,35 +154,63 @@ adb は PATH、`~/Library/Android/sdk/platform-tools`、Homebrew の場所から
 ./mac/locationlab.py walk 35.68,139.76 --from 35.69,139.70      # 出発地を指定
 ./mac/locationlab.py pause | resume | status
 ./mac/locationlab.py speed 3.5                                  # 速度変更 (km/h)
-./mac/locationlab.py set 35.681236,139.767125                   # 固定（初回、または近距離のみ）
+./mac/locationlab.py set 35.681236,139.767125                   # 固定（100 m 超の瞬間移動は --force が必要）
 ./mac/locationlab.py stop                                       # 解除して実際の位置に戻す
 ```
 
-複数端末接続時は `-s <serial>` を付けます。端末上のアプリ画面からも同じ操作ができます。
+複数の端末を接続している場合は `-s <serial>` を付けます。
 
-## 状態とエラー
+---
 
-- 状態: `IDLE` / `HOLDING` / `WALKING` / `PAUSED` / `ARRIVED` / `ERROR`（`adb shell dumpsys activity service dev.locationlab.helper/.MockLocationService` で取得）
-- mock 位置アプリに選択されていない等で失敗した場合は `ERROR` になり、CLI は成功表示をせず終了コード 1 を返します。テストプロバイダは解除されます。
-- `stop` はサービス終了（テストプロバイダ削除）を確認してから完了を表示します。サービスが強制終了された等で解除されていない場合も、もう一度 `stop` を実行すれば残ったテストプロバイダを削除します。
+## 仕組み・仕様
 
-## プライバシー
+- 端末側アプリは Foreground Service として、gps / network / fused（Android 12 以降）のテストプロバイダに 1 秒ごとに位置・進行方向・速度を設定します。
+- 移動の出発地は、次の順で決まります。
+  1. 指定した出発地
+  2. 現在のシミュレーション位置
+  3. シミュレーション開始前の実際の最終位置
+- 状態は `IDLE` / `HOLDING` / `WALKING` / `PAUSED` / `ARRIVED` / `ERROR` のいずれかです。`adb shell dumpsys activity service dev.locationlab.helper/.MockLocationService` で取得できます。
+- mock 位置アプリに設定されていない場合などは `ERROR` になり、GUI / CLI は成功と表示しません。
+- 停止は、サービス終了（テストプロバイダ削除）を確認してから完了と表示します。強制終了などで解除されていない場合も、もう一度停止を実行すれば残ったテストプロバイダを削除します。
+- 位置履歴は保存しません。座標はログ（logcat）にも出力しません。
 
-位置履歴は保存しません。座標はログ（logcat）にも出力しません。
+### Mac GUI について
+
+- Electron ではなく Tauri を採用しています。OS 標準の WebView を使い Chromium を同梱しないため、アプリサイズとメモリ使用量が小さくなります。
+  - 実測で .app は約 3.3 MB、移動中の本体プロセスは約 80 MB・CPU ほぼ 0% でした（WebKit プロセスは別）。
+  - ウィンドウ非表示中は、状態取得の間隔を 5 秒に落とします。
+- 地図は OpenStreetMap の標準タイルを使っています。無料で API キーも不要です。[タイル利用ポリシー](https://operations.osmfoundation.org/policies/tiles/)の範囲で利用してください。
+- adb は PATH、`~/Library/Android/sdk/platform-tools`、Homebrew の場所から自動で探します。
+  - 見つからない場合は、環境変数 `LOCATIONLAB_ADB` に adb のパスを指定してください。
+  - Finder から起動した .app は、シェルの PATH を引き継ぎません。
 
 ## 制約
 
 - Android の mock location 機構を使うため、受け取った位置には mock フラグ（`Location.isMock()`）が付きます。アプリ側がこれを検出して拒否・制限する場合があり、その回避は対象外です。各アプリの利用規約は利用者の責任で確認してください。
-- Google Play 開発者サービスの Fused Location Provider への反映は端末・バージョンに依存します（本アプリはプラットフォームの gps / network / fused(API 31+) テストプロバイダに位置を設定します）。
-- 端末上で動き続ける Foreground Service なので、Mac との接続が切れても移動は継続します。終了は `stop`、通知の「Stop & restore」、またはアプリの「停止」ボタンで行います。
+- Google Play 開発者サービスの Fused Location Provider に反映されるかどうかは、端末・バージョンによって異なります。
+- 端末上で動き続ける Foreground Service なので、Mac との接続が切れても移動は続きます。
 
 ## トラブルシューティング
 
-- adb サーバーが頻繁に落ちて `device offline` になる場合（macOS 新バージョンで mDNS 周りのクラッシュを確認）は、mDNS を無効にして adb サーバーを起動し直してください。
-  ```sh
-  adb kill-server
-  ADB_MDNS=0 ADB_MDNS_OPENSCREEN=0 adb start-server
-  ```
+| 症状 | 対処 |
+|---|---|
+| GUI の端末欄に「端末が接続されていません」と出る | `adb devices` で `device` と出るか確認します。USB ケーブルがデータ通信に対応しているか、USB デバッグが ON かを確認し、↻ ボタンで再読込します。 |
+| 端末が `unauthorized` になる | 端末の画面に出ている「USB デバッグを許可」を承認します。 |
+| 「adb に接続できません」「adb が見つかりません」と出る | `brew install --cask android-platform-tools` を実行します。別の場所の adb を使う場合は `LOCATIONLAB_ADB` を設定します。 |
+| 「not selected as the mock location app」エラー | 「端末セットアップ」を実行するか、開発者向けオプションの「仮の現在地情報アプリ」で Location Lab を選択します。 |
+| 「Start position unknown」エラー | 端末がまだ現在地を取得していません。「最初の点を出発地にする」で出発地を指定するか、端末で一度地図アプリなどを開いて現在地を取得します。 |
+| adb が頻繁に落ちて `device offline` になる | macOS の新しいバージョンで、mDNS 周りのクラッシュを確認しています。`adb kill-server` の後に `ADB_MDNS=0 ADB_MDNS_OPENSCREEN=0 adb start-server` で起動し直します。 |
+| `./gradlew` で SDK が見つからない | `echo $ANDROID_HOME` で環境変数が設定されているか確認します。 |
+| `npm run build` で `cargo` が見つからない | 新しいターミナルを開くか、`source "$HOME/.cargo/env"` を実行します。 |
+
+## アンインストール
+
+```sh
+./mac/locationlab.py stop                 # シミュレーション中なら解除
+adb uninstall dev.locationlab.helper      # 端末から削除
+```
+
+不要であれば、端末の「開発者向けオプション」で USB デバッグを OFF にしてください。
 
 ## テスト
 
