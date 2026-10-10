@@ -3,6 +3,7 @@
 Mac に接続した Android 端末の位置情報を、Android 公式の mock location（テストプロバイダ）機構でシミュレーションするツールです。
 
 - `android/` — 端末側の補助アプリ（Kotlin、外部ライブラリ依存なし）
+- `desktop/` — Mac の GUI アプリ（Tauri 2。地図で経路を指定して操作）
 - `mac/locationlab.py` — Mac から adb 経由で操作する CLI（Python 3 標準ライブラリのみ）
 
 ## できること
@@ -32,7 +33,34 @@ cd android && ./gradlew assembleDebug && cd ..
 
 `setup` は `adb shell appops set ... android:mock_location allow` を実行します。端末上で手動設定する場合は「開発者向けオプション → 仮の現在地情報アプリを選択 → Location Lab」です。
 
-## 使い方
+## Mac GUI（desktop/）
+
+地図（OpenStreetMap）をクリックして目的地・経由地を指定し、徒歩移動・固定・一時停止・停止を操作できます。
+
+- 状態（移動中 / 一時停止 / 固定中 / 到着 / エラー）、現在位置、残り距離・所要時間を表示し、地図上のマーカーが移動に追従します
+- 経路の距離と所要時間を開始前にプレビュー。「最初の点を出発地にする」で出発地も地図で指定可能
+- GPX 読込、座標の直接入力、速度プリセット（4 / 5 / 6 km/h）、移動中の速度変更
+- 100 m 超の瞬間移動になる「固定」は確認ダイアログを表示
+- 「端末セットアップ」で APK インストール・権限付与・mock 位置アプリ設定
+- 「終了時にシミュレーションを解除」（既定 ON）: アプリ終了時に端末の mock を解除して通常位置に戻します
+
+Electron ではなく Tauri を採用しています（OS 標準の WebView を使うため、Chromium を同梱する Electron よりアプリサイズ・メモリ使用量が小さい）。
+実測では .app が約 3.3 MB、移動中の本体プロセスが約 80 MB / CPU ほぼ 0%（WebKit プロセス別）でした。
+
+### ビルド・起動
+
+Rust（`rustup`）と Node.js が必要です。
+
+```sh
+cd desktop
+npm install
+npm run dev      # 開発起動
+npm run build    # src-tauri/target/release/bundle/ に .app / .dmg を生成
+```
+
+adb は PATH、`~/Library/Android/sdk/platform-tools`、Homebrew の場所から自動で探します。見つからない場合は環境変数 `LOCATIONLAB_ADB` に adb のパスを指定してください（Finder から起動した .app はシェルの PATH を引き継ぎません）。
+
+## CLI の使い方
 
 ```sh
 ./mac/locationlab.py walk 35.681236,139.767125 --follow        # 現在位置から東京駅まで 5 km/h で歩く
@@ -63,9 +91,19 @@ cd android && ./gradlew assembleDebug && cd ..
 - Google Play 開発者サービスの Fused Location Provider への反映は端末・バージョンに依存します（本アプリはプラットフォームの gps / network / fused(API 31+) テストプロバイダに位置を設定します）。
 - 端末上で動き続ける Foreground Service なので、Mac との接続が切れても移動は継続します。終了は `stop`、通知の「Stop & restore」、またはアプリの「停止」ボタンで行います。
 
+## トラブルシューティング
+
+- adb サーバーが頻繁に落ちて `device offline` になる場合（macOS 新バージョンで mDNS 周りのクラッシュを確認）は、mDNS を無効にして adb サーバーを起動し直してください。
+  ```sh
+  adb kill-server
+  ADB_MDNS=0 ADB_MDNS_OPENSCREEN=0 adb start-server
+  ```
+
 ## テスト
 
 ```sh
 cd android && ./gradlew testDebugUnitTest   # 座標・経路・速度計算
 python3 -m unittest discover -s mac/tests  # CLI（座標検証・GPX・コマンド）
+cd desktop && npm test                      # GUI の座標計算・GPX パース
+cd desktop/src-tauri && cargo test          # GUI の adb 連携（入力検証・状態パース）
 ```
