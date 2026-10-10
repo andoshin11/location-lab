@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Location Lab</title>
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <section>
+        <h2>端末</h2>
+        <div class="row">
+          <select id="device"></select>
+          <button id="refresh-devices" title="端末一覧を更新">↻</button>
+        </div>
+        <details id="setup">
+          <summary>端末セットアップ</summary>
+          <p class="hint">APK のパスを指定するとインストールも行います。空欄なら権限付与と「仮の現在地情報アプリ」設定のみ。</p>
+          <input id="apk-path" placeholder="/path/to/app-debug.apk" spellcheck="false" />
+          <button id="setup-device">セットアップ実行</button>
+        </details>
+      </section>
+
+      <section>
+        <h2>状態</h2>
+        <div id="status">
+          <span id="state-badge" class="badge">未接続</span>
+          <dl>
+            <dt>位置</dt><dd id="st-position">–</dd>
+            <dt>速度</dt><dd id="st-speed">–</dd>
+            <dt>残り</dt><dd id="st-remaining">–</dd>
+          </dl>
+          <p id="st-error" class="error" hidden></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>経路</h2>
+        <p class="hint">地図をクリックすると目的地（経由地）を追加します。</p>
+        <ol id="waypoints"></ol>
+        <div class="row">
+          <input id="add-point" placeholder="緯度,経度" spellcheck="false" />
+          <button id="add-point-btn">追加</button>
+        </div>
+        <label class="check"><input type="checkbox" id="first-is-start" /> 最初の点を出発地にする</label>
+        <div class="row">
+          <label class="file-btn">GPX 読込<input type="file" id="gpx" accept=".gpx,application/gpx+xml" hidden /></label>
+          <button id="clear-route">クリア</button>
+        </div>
+        <p id="route-summary" class="summary">–</p>
+      </section>
+
+      <section>
+        <h2>速度</h2>
+        <div class="row">
+          <input id="speed" type="number" min="0.4" max="180" step="0.5" value="5" />
+          <span>km/h</span>
+          <button id="apply-speed" title="移動中の速度を変更">変更</button>
+        </div>
+        <div class="row presets">
+          <button data-speed="4">ゆっくり 4</button>
+          <button data-speed="5">徒歩 5</button>
+          <button data-speed="6">早歩き 6</button>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="walk" class="primary">徒歩で移動開始</button>
+        <div class="row">
+          <button id="pause">一時停止</button>
+          <button id="resume">再開</button>
+        </div>
+        <button id="hold">最後の点に固定</button>
+        <button id="stop" class="danger">停止して通常位置に戻す</button>
+        <label class="check"><input type="checkbox" id="stop-on-exit" checked /> 終了時にシミュレーションを解除</label>
+      </section>
+
+      <p id="message" class="message" hidden></p>
+    </aside>
+    <main id="map"></main>
+
+    <dialog id="confirm">
+      <form method="dialog">
+        <p id="confirm-text"></p>
+        <div class="row dialog-buttons">
+          <button value="cancel">キャンセル</button>
+          <button value="ok" class="primary">固定する</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
