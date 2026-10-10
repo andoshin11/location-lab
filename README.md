@@ -1,17 +1,21 @@
 # location-lab
 
-Mac に接続した Android 端末の位置情報を、Android 公式の mock location（テストプロバイダ）機構でシミュレーションするツールです。
+Mac に接続した Android / iOS 端末の位置情報をシミュレーションするツールです。
+Android は公式の mock location（テストプロバイダ）機構、iOS は Apple の開発者向け位置シミュレーション機能を使います。
 地図で目的地を指定すると、現在地から目的地まで **徒歩の速度で少しずつ移動** させることができます。
 
 | ディレクトリ | 内容 |
 |---|---|
 | `android/` | 端末にインストールする補助アプリ（Kotlin、外部ライブラリ依存なし） |
-| `desktop/` | Mac の GUI アプリ（Tauri 2。地図で操作） |
+| `desktop/` | Mac の GUI アプリ（Tauri 2。地図で操作。Android / iOS 両対応） |
 | `mac/locationlab.py` | Mac から操作する CLI（Python 3 標準ライブラリのみ） |
 
 ```
- Mac (GUI / CLI) ──USB / adb──▶ Android 端末: Location Lab アプリ ──▶ mock location ──▶ 各アプリ
+ Mac (GUI / CLI) ──USB / Wi-Fi (adb)────────▶ Android: Location Lab アプリ ──▶ mock location
+ Mac (GUI)       ──USB (pymobiledevice3)────▶ iPhone / iPad: 開発者向け位置シミュレーション
 ```
+
+iOS だけを使う場合は、下の「セットアップ」の Android 向け手順（2・3・5）は不要です。「[iOS（iPhone / iPad）で使う](#iosiphone--ipadで使う)」を参照してください。
 
 ---
 
@@ -143,6 +147,52 @@ Android 11 以降なら、USB の代わりに Wi-Fi（ワイヤレスデバッ�
 
 ---
 
+## iOS（iPhone / iPad）で使う
+
+iOS には端末側のアプリを入れません。Mac の GUI が、Apple の開発者向け位置シミュレーション機能を [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) 経由で操作します。
+
+- 対応: iOS 17 以降（DVT の位置シミュレーション）と iOS 16 以下（`com.apple.dt.simulatelocation`）。接続は USB のみです。
+- 徒歩移動は Mac 側で 1 秒ごとの地点を計算して端末へ送ります。そのため、**移動中は Mac と USB で接続したまま**にしてください。
+
+### 1. Mac に pymobiledevice3 を入れる
+
+上の「1. Mac に必要なツールを入れる」の Node.js・Rust（GUI のビルド用）に加えて、次を実行します。
+
+```sh
+brew install uv
+uv tool install pymobiledevice3
+uv tool update-shell   # ~/.local/bin を PATH に追加（新しいターミナルで有効）
+pymobiledevice3 version
+```
+
+GUI は PATH、`~/.local/bin`、Homebrew の場所から `pymobiledevice3` を自動で探します。見つからない場合は、環境変数 `LOCATIONLAB_PMD3` にパスを指定してください。
+
+> pymobiledevice3 は GPL-3.0-or-later です。本リポジトリには含めず、GUI からは別プロセスのコマンドとして呼び出しています。
+
+### 2. iPhone / iPad の準備（初回のみ）
+
+1. **USB で Mac に接続**し、端末に「このコンピュータを信頼しますか？」と表示されたら「信頼」を選んでパスコードを入力します。
+2. **デベロッパモードを ON にする**（iOS 16 以降）
+   「設定 → プライバシーとセキュリティ → デベロッパモード」を ON にし、再起動後の確認で「オンにする」を選びます。
+   - 項目が表示されない場合は、先に GUI の「端末セットアップ」を一度実行すると表示されるようになります。
+3. 端末のロックを解除しておきます（ロック中は操作に失敗することがあります）。
+
+### 3. GUI から端末セットアップ
+
+1. GUI を起動し、端末欄に「（端末名） · iOS 18.x」のように表示されることを確認します。
+2. 「端末セットアップ」→「セットアップ実行」を押します。
+   - デベロッパモードを確認し、位置シミュレーションに必要なデベロッパディスクイメージを端末にマウントします。
+   - 初回はイメージのダウンロードで数分かかることがあります。端末を再起動したあとは、もう一度実行してください。
+
+### iOS での使い方の違い
+
+- **初回は出発地の指定が必要です。** iOS では Mac から端末の実際の現在地を取得できないため、「最初の点を出発地にする」にチェックして、地図で出発地 → 目的地の順にクリックしてください。2 回目以降は、現在のシミュレーション位置から出発できます。
+- 各操作は端末との接続確立に数秒〜数十秒かかることがあります（「iPhone / iPad と通信しています…」と表示されます）。
+- 位置は Mac 上の pymobiledevice3 プロセスが保持しています。
+  - 「終了時にシミュレーションを解除」が ON（既定）なら、GUI 終了時に解除します。
+  - OFF の場合や GUI が強制終了した場合は、バックグラウンドのプロセスが位置を保持し続けます。次に GUI を起動して「停止して通常位置に戻す」を押すと、残ったプロセスも終了して解除されます。
+- 手動で解除する場合: `pymobiledevice3 developer dvt simulate-location clear`（iOS 16 以下は `developer simulate-location clear`）。端末の再起動でも解除されます。
+
 ## 使い方（GUI）
 
 1. **目的地を指定する**
@@ -205,6 +255,7 @@ Android 11 以降なら、USB の代わりに Wi-Fi（ワイヤレスデバッ�
 
 ## 制約
 
+- iOS 17 以降では、アプリはソフトウェアによる位置シミュレーションかどうか（`CLLocationSourceInformation.isSimulatedBySoftware`）を判定できます。Android の mock フラグと同様、アプリ側の検出の回避は対象外です。
 - Android の mock location 機構を使うため、受け取った位置には mock フラグ（`Location.isMock()`）が付きます。アプリ側がこれを検出して拒否・制限する場合があり、その回避は対象外です。各アプリの利用規約は利用者の責任で確認してください。
 - Google Play 開発者サービスの Fused Location Provider に反映されるかどうかは、端末・バージョンによって異なります。
 - 端末上で動き続ける Foreground Service なので、Mac との接続が切れても移動は続きます。
@@ -221,6 +272,11 @@ Android 11 以降なら、USB の代わりに Wi-Fi（ワイヤレスデバッ�
 | 「not selected as the mock location app」エラー | 「端末セットアップ」を実行するか、開発者向けオプションの「仮の現在地情報アプリ」で Location Lab を選択します。 |
 | 「Start position unknown」エラー | 端末がまだ現在地を取得していません。「最初の点を出発地にする」で出発地を指定するか、端末で一度地図アプリなどを開いて現在地を取得します。 |
 | adb が頻繁に落ちて `device offline` になる | macOS の新しいバージョンで、mDNS 周りのクラッシュを確認しています。`adb kill-server` の後に `ADB_MDNS=0 ADB_MDNS_OPENSCREEN=0 adb start-server` で起動し直します。 |
+| iOS 端末が端末欄に出ない | USB で接続し、端末で「信頼」を選んだか確認します。`pymobiledevice3 usbmux list` に表示されるか確認し、↻ で再読込します。 |
+| 「pymobiledevice3 が必要です」と出る | 「iOS で使う」の手順 1 でインストールします。別の場所にある場合は `LOCATIONLAB_PMD3` を設定します。 |
+| iOS で「デベロッパモード」のエラー | 端末の「設定 → プライバシーとセキュリティ → デベロッパモード」を ON にして再起動します。 |
+| iOS で「デベロッパディスクイメージ」「端末セットアップを実行」のエラー | 「端末セットアップ」を実行します。端末の再起動後は毎回必要です。 |
+| iOS で「端末からの応答がありません（タイムアウト）」 | 端末のロックを解除し、USB ケーブルを挿し直してから再実行します。 |
 | `./gradlew` で SDK が見つからない | `echo $ANDROID_HOME` で環境変数が設定されているか確認します。 |
 | `npm run build` で `cargo` が見つからない | 新しいターミナルを開くか、`source "$HOME/.cargo/env"` を実行します。 |
 
@@ -239,5 +295,5 @@ adb uninstall dev.locationlab.helper      # 端末から削除
 cd android && ./gradlew testDebugUnitTest   # 座標・経路・速度計算
 python3 -m unittest discover -s mac/tests  # CLI（座標検証・GPX・コマンド）
 cd desktop && npm test                      # GUI の座標計算・GPX パース
-cd desktop/src-tauri && cargo test          # GUI の adb 連携（入力検証・状態パース）
+cd desktop/src-tauri && cargo test          # GUI の adb / iOS 連携（入力検証・状態パース・経路計算・フェイク pymobiledevice3 での操作）
 ```

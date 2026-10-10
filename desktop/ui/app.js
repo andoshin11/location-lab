@@ -9,6 +9,7 @@ const POLL_HIDDEN_MS = 5000; // ウィンドウ非表示中は負荷を下げる
 
 const state = {
   serial: null,
+  devices: [],
   status: null,
   waypoints: [],
   centeredOnce: false,
@@ -103,7 +104,9 @@ function updateSummary() {
     return;
   }
   if (!start) {
-    $("route-summary").textContent = "出発地: 端末の実際の位置（距離は開始後に表示）";
+    $("route-summary").textContent = isIos()
+      ? "iOS では出発地の指定が必要です（「最初の点を出発地にする」にチェック）"
+      : "出発地: 端末の実際の位置（距離は開始後に表示）";
     return;
   }
   const length = routeLengthM([start, ...targets]);
@@ -157,7 +160,7 @@ document.querySelectorAll("[data-speed]").forEach((b) => {
     updateSummary();
   };
 });
-$("apply-speed").onclick = () => run(() => invoke("set_speed", { serial: state.serial, speedKmh: speedKmh() }), "速度を変更しました");
+$("apply-speed").onclick = () => run(() => invoke("set_speed", { ...target(), speedKmh: speedKmh() }), "速度を変更しました");
 
 // ---- 操作 ----
 
@@ -166,19 +169,19 @@ $("walk").onclick = () =>
     const targets = routeTargets();
     if (targets.length === 0) throw new Error("目的地を地図上で指定してください");
     const from = $("first-is-start").checked ? state.waypoints[0] : null;
-    const status = await invoke("start_walk", { serial: state.serial, waypoints: targets, from, speedKmh: speedKmh() });
+    const status = await invoke("start_walk", { ...target(), waypoints: targets, from, speedKmh: speedKmh() });
     applyStatus(status);
   }, "移動を開始しました");
 
-$("pause").onclick = () => run(async () => applyStatus(await invoke("pause_walk", { serial: state.serial })));
-$("resume").onclick = () => run(async () => applyStatus(await invoke("resume_walk", { serial: state.serial })));
+$("pause").onclick = () => run(async () => applyStatus(await invoke("pause_walk", target())), "一時停止しました");
+$("resume").onclick = () => run(async () => applyStatus(await invoke("resume_walk", target())), "再開しました");
 
 $("hold").onclick = () =>
   run(async () => {
     const point = state.waypoints.at(-1);
     if (!point) throw new Error("固定する地点を地図上で指定してください");
     try {
-      applyStatus(await invoke("set_position", { serial: state.serial, point, force: false }));
+      applyStatus(await invoke("set_position", { ...target(), point, force: false }));
     } catch (e) {
       const m = String(e).match(/^JUMP:(\d+)/);
       if (!m) throw e;
@@ -187,16 +190,16 @@ $("hold").onclick = () =>
           "徐々に移動するには「徒歩で移動開始」を使ってください。それでも固定しますか？",
       );
       if (!ok) return "cancel";
-      applyStatus(await invoke("set_position", { serial: state.serial, point, force: true }));
+      applyStatus(await invoke("set_position", { ...target(), point, force: true }));
     }
   }, "指定地点に固定しました");
 
 $("stop").onclick = () =>
-  run(async () => applyStatus(await invoke("stop_simulation", { serial: state.serial })), "停止しました。端末は通常の位置情報に戻りました。");
+  run(async () => applyStatus(await invoke("stop_simulation", target())), "停止しました。端末は通常の位置情報に戻りました。");
 
 $("setup-device").onclick = () =>
   run(async () => {
-    const log = await invoke("setup_device", { serial: state.serial, apk: $("apk-path").value || null });
+    const log = await invoke("setup_device", { ...target(), apk: $("apk-path").value || null });
     showMessage(log);
     return "keep-message";
   });
@@ -246,7 +249,7 @@ $("connect-btn").onclick = () =>
     // 接続直後は offline のことがあるので少し待ってから一覧を取り直す
     for (let i = 0; i < 5; i++) {
       await new Promise((r) => setTimeout(r, 600));
-      const devices = await invoke("list_devices");
+      const { devices } = await invoke("list_devices");
       if (devices.some((d) => d.serial === serial && d.state === "device")) break;
     }
     await refreshDevices();
@@ -266,6 +269,8 @@ async function run(fn, successMessage) {
   if (state.busy) return;
   state.busy = true;
   updateButtons();
+  // iOS はトンネル確立などで数十秒かかることがある
+  if (isIos()) showMessage("iPhone / iPad と通信しています…");
   try {
     const result = await fn();
     if (result === "cancel" || result === "keep-message") return;
@@ -282,7 +287,8 @@ function updateButtons() {
   const connected = !!state.serial && !state.busy;
   const s = state.status?.state;
   const has = routeTargets().length > 0;
-  $("walk").disabled = !connected || !has;
+  // iOS は実際の現在地を取得できないので、出発地（現在のシミュレーション位置か指定）が必要
+  $("walk").disabled = !connected || !has || (isIos() && !routeStart());
   $("hold").disabled = !connected || state.waypoints.length === 0;
   $("pause").disabled = !connected || s !== "WALKING";
   $("resume").disabled = !connected || s !== "PAUSED";
@@ -314,17 +320,46 @@ function showMessage(text, isError = false) {
 
 // ---- 端末と状態 ----
 
+function currentDevice() {
+  return state.devices.find((d) => d.serial === state.serial) ?? null;
+}
+
+function currentPlatform() {
+  return currentDevice()?.platform ?? null;
+}
+
+function isIos() {
+  return currentPlatform() === "ios";
+}
+
+/** コマンドの対象端末（バックエンドは platform で Android / iOS を切り替える）。 */
+function target() {
+  return { serial: state.serial, platform: currentPlatform() ?? "android" };
+}
+
+/** 端末の種類に応じて、セットアップ欄などの表示を切り替える。 */
+function renderPlatform() {
+  const ios = isIos();
+  $("apk-path").hidden = ios;
+  $("setup-hint").textContent = ios
+    ? "デベロッパモードを確認し、位置シミュレーションに必要なデベロッパディスクイメージをマウントします（初回は数分かかることがあります）。"
+    : "APK のパスを指定するとインストールも行います。空欄なら権限付与と「仮の現在地情報アプリ」設定のみ。";
+  $("wireless").hidden = ios;
+}
+
 async function refreshDevices() {
   const select = $("device");
   try {
-    const devices = await invoke("list_devices");
+    const { devices, warnings } = await invoke("list_devices");
+    state.devices = devices;
     select.replaceChildren();
     for (const d of devices) {
       const o = document.createElement("option");
       o.value = d.serial;
       o.disabled = d.state !== "device";
       const via = isWirelessSerial(d.serial) || d.serial.includes("._adb-tls-connect.") ? " · Wi-Fi" : "";
-      o.textContent = `${d.model ?? d.serial}${via}${d.state !== "device" ? `（${d.state}）` : ""}`;
+      const os = d.platform === "ios" ? ` · iOS ${d.os_version ?? ""}` : "";
+      o.textContent = `${d.model ?? d.serial}${os}${via}${d.state !== "device" ? `（${d.state}）` : ""}`;
       select.append(o);
     }
     const usable = devices.filter((d) => d.state === "device");
@@ -337,23 +372,29 @@ async function refreshDevices() {
     select.value = state.serial ?? "";
     if (devices.some((d) => d.state === "unauthorized")) {
       showMessage("端末で「USB デバッグを許可」を承認してください", true);
+    } else if (usable.length === 0 && warnings.length > 0) {
+      showMessage(warnings.join("\n"), true);
     }
   } catch (e) {
-    select.replaceChildren(new Option("adb に接続できません", ""));
+    state.devices = [];
+    select.replaceChildren(new Option("adb / pymobiledevice3 に接続できません", ""));
     state.serial = null;
     showMessage(String(e), true);
   }
+  renderPlatform();
   await syncSession();
   updateButtons();
 }
 
 async function syncSession() {
-  await invoke("set_session", { serial: state.serial, stopOnExit: $("stop-on-exit").checked });
+  await invoke("set_session", { serial: state.serial, platform: currentPlatform(), stopOnExit: $("stop-on-exit").checked });
 }
 
 $("device").onchange = (e) => {
   state.serial = e.target.value || null;
   state.centeredOnce = false;
+  state.status = null;
+  renderPlatform();
   syncSession();
   updateButtons();
 };
@@ -403,7 +444,7 @@ function applyStatus(status) {
 async function poll() {
   if (state.serial && !state.busy) {
     try {
-      applyStatus(await invoke("get_status", { serial: state.serial }));
+      applyStatus(await invoke("get_status", target()));
     } catch (e) {
       // 切断された可能性があるので端末一覧を取り直す
       applyStatus({ state: "NOT_RUNNING", position: null, speed_kmh: 0, remaining_m: 0, remaining_s: 0, error: null });

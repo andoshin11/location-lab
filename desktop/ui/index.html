@@ -16,7 +16,7 @@
           <button id="refresh-devices" title="端末一覧を更新">↻</button>
         </div>
         <details id="wireless">
-          <summary>ワイヤレス接続（Wi-Fi）</summary>
+          <summary>ワイヤレス接続（Android / Wi-Fi）</summary>
           <p class="hint">
             端末の「開発者向けオプション → ワイヤレスデバッグ」を ON にし、Mac と同じ Wi-Fi に接続してください（Android 11 以降）。
           </p>
@@ -37,7 +37,7 @@
         </details>
         <details id="setup">
           <summary>端末セットアップ</summary>
-          <p class="hint">APK のパスを指定するとインストールも行います。空欄なら権限付与と「仮の現在地情報アプリ」設定のみ。</p>
+          <p class="hint" id="setup-hint">APK のパスを指定するとインストールも行います。空欄なら権限付与と「仮の現在地情報アプリ」設定のみ。</p>
           <input id="apk-path" placeholder="/path/to/app-debug.apk" spellcheck="false" />
           <button id="setup-device">セットアップ実行</button>
         </details>
