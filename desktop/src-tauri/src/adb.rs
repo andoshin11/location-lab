@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -128,6 +128,9 @@ pub struct Device {
     pub serial: String,
     pub state: String,
     pub model: Option<String>,
+    /// "android" | "ios"
+    pub platform: String,
+    pub os_version: Option<String>,
 }
 
 /// `adb devices -l` の出力をパースする。
@@ -140,7 +143,7 @@ pub fn parse_devices(text: &str) -> Vec<Device> {
             let serial = it.next()?.to_string();
             let state = it.next()?.to_string();
             let model = it.find_map(|kv| kv.strip_prefix("model:").map(|m| m.replace('_', " ")));
-            Some(Device { serial, state, model })
+            Some(Device { serial, state, model, platform: "android".into(), os_version: None })
         })
         .collect()
 }
@@ -208,6 +211,48 @@ pub fn find_adb() -> Result<PathBuf, String> {
         })
 }
 
+/// 外部コマンドをタイムアウト付きで実行し、stdout+stderr を返す。失敗時は出力をエラーにする。
+pub fn run_command(exe: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("を起動できません: {e}"))?;
+    // 出力が多いとパイプが詰まるので別スレッドで読む
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let out_t = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout.read_to_string(&mut s);
+        s
+    });
+    let err_t = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
+            break st;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("がタイムアウトしました: {}", args.join(" ")));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let out = format!("{}{}", out_t.join().unwrap_or_default(), err_t.join().unwrap_or_default());
+    let out = out.trim().to_string();
+    if !status.success() {
+        return Err(format!("エラー: {out}"));
+    }
+    Ok(out)
+}
+
 pub struct Adb {
     exe: PathBuf,
     serial: Option<String>,
@@ -219,48 +264,12 @@ impl Adb {
     }
 
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<String, String> {
-        let mut cmd = Command::new(&self.exe);
+        let mut full: Vec<&str> = Vec::new();
         if let Some(s) = &self.serial {
-            cmd.args(["-s", s]);
+            full.extend_from_slice(&["-s", s]);
         }
-        let mut child = cmd
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("adb を起動できません: {e}"))?;
-        // 出力が多いとパイプが詰まるので別スレッドで読む
-        let mut stdout = child.stdout.take().unwrap();
-        let mut stderr = child.stderr.take().unwrap();
-        let out_t = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = stdout.read_to_string(&mut s);
-            s
-        });
-        let err_t = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = stderr.read_to_string(&mut s);
-            s
-        });
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
-                break st;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("adb がタイムアウトしました: {}", args.join(" ")));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        let out = format!("{}{}", out_t.join().unwrap_or_default(), err_t.join().unwrap_or_default());
-        let out = out.trim().to_string();
-        if !status.success() {
-            return Err(format!("adb エラー: {out}"));
-        }
-        Ok(out)
+        full.extend_from_slice(args);
+        run_command(&self.exe, &full, timeout).map_err(|e| format!("adb {e}"))
     }
 
     pub fn shell(&self, args: &[&str]) -> Result<String, String> {
