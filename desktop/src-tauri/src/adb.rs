@@ -145,6 +145,43 @@ pub fn parse_devices(text: &str) -> Vec<Device> {
         .collect()
 }
 
+/// ワイヤレスデバッグの接続先 "host:port" を検証して正規化する。
+pub fn parse_host_port(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let (host, port) = text
+        .rsplit_once(':')
+        .ok_or_else(|| format!("「IP アドレス:ポート」の形式で入力してください: {text}"))?;
+    let valid_host = !host.is_empty()
+        && host.len() <= 253
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if !valid_host {
+        return Err(format!("IP アドレスが不正です: {host}"));
+    }
+    match port.parse::<u16>() {
+        Ok(p) if p > 0 => Ok(format!("{host}:{p}")),
+        _ => Err(format!("ポート番号が不正です: {port}")),
+    }
+}
+
+/// ペア設定コード（6 桁の数字）を検証する。
+pub fn parse_pairing_code(text: &str) -> Result<String, String> {
+    let code = text.trim();
+    if code.len() == 6 && code.chars().all(|c| c.is_ascii_digit()) {
+        Ok(code.to_string())
+    } else {
+        Err("ペア設定コードは 6 桁の数字です".into())
+    }
+}
+
+/// `adb connect` は失敗しても終了コード 0 を返すことがあるため、出力で判定する。
+pub fn connect_succeeded(output: &str) -> bool {
+    let out = output.to_ascii_lowercase();
+    (out.contains("connected to") || out.contains("already connected"))
+        && !out.contains("failed")
+        && !out.contains("cannot")
+        && !out.contains("unable")
+}
+
 /// GUI アプリは Finder から起動するとシェルの PATH を引き継がないため、よくある場所も探す。
 pub fn find_adb() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("LOCATIONLAB_ADB") {
@@ -276,6 +313,28 @@ impl Adb {
         }
     }
 
+    pub fn pair(&self, host: &str, code: &str) -> Result<String, String> {
+        let out = self.run(&["pair", host, code], Duration::from_secs(20))?;
+        if out.contains("Successfully paired") {
+            Ok(out)
+        } else {
+            Err(format!("ペア設定に失敗しました: {out}"))
+        }
+    }
+
+    pub fn connect(&self, host: &str) -> Result<String, String> {
+        let out = self.run(&["connect", host], Duration::from_secs(15))?;
+        if connect_succeeded(&out) {
+            Ok(out)
+        } else {
+            Err(format!("接続できませんでした: {out}"))
+        }
+    }
+
+    pub fn disconnect(&self, host: &str) -> Result<String, String> {
+        self.run(&["disconnect", host], Duration::from_secs(10))
+    }
+
     pub fn install(&self, apk: &str) -> Result<String, String> {
         self.run(&["install", "-r", apk], Duration::from_secs(180))
     }
@@ -334,6 +393,29 @@ mod tests {
 
         let err = Status::from_dumpsys("state=ERROR\nerror=not selected=x\n");
         assert_eq!(err.error.as_deref(), Some("not selected=x"));
+    }
+
+    #[test]
+    fn validates_wireless_inputs() {
+        assert_eq!(parse_host_port(" 192.168.1.20:37099 ").unwrap(), "192.168.1.20:37099");
+        assert_eq!(parse_host_port("pixel.local:5555").unwrap(), "pixel.local:5555");
+        assert!(parse_host_port("192.168.1.20").is_err());
+        assert!(parse_host_port("192.168.1.20:0").is_err());
+        assert!(parse_host_port("192.168.1.20:70000").is_err());
+        assert!(parse_host_port(":5555").is_err());
+        assert!(parse_host_port("1.2.3.4;rm -rf:5555").is_err());
+
+        assert_eq!(parse_pairing_code(" 123456 ").unwrap(), "123456");
+        assert!(parse_pairing_code("12345").is_err());
+        assert!(parse_pairing_code("12a456").is_err());
+    }
+
+    #[test]
+    fn interprets_connect_output() {
+        assert!(connect_succeeded("connected to 192.168.1.20:37099"));
+        assert!(connect_succeeded("already connected to 192.168.1.20:37099"));
+        assert!(!connect_succeeded("failed to connect to '192.168.1.20:37099': Connection refused"));
+        assert!(!connect_succeeded("cannot connect to 192.168.1.20:37099: No route to host"));
     }
 
     #[test]

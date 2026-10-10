@@ -15,6 +15,26 @@
           <select id="device"></select>
           <button id="refresh-devices" title="端末一覧を更新">↻</button>
         </div>
+        <details id="wireless">
+          <summary>ワイヤレス接続（Wi-Fi）</summary>
+          <p class="hint">
+            端末の「開発者向けオプション → ワイヤレスデバッグ」を ON にし、Mac と同じ Wi-Fi に接続してください（Android 11 以降）。
+          </p>
+          <h3>1. ペア設定（初回のみ）</h3>
+          <p class="hint">「ペア設定コードによるデバイスのペア設定」に表示される IP アドレス:ポートとコードを入力します。</p>
+          <input id="pair-host" placeholder="192.168.1.20:37123" spellcheck="false" />
+          <div class="row">
+            <input id="pair-code" placeholder="6 桁のコード" inputmode="numeric" maxlength="6" spellcheck="false" />
+            <button id="pair-btn">ペア設定</button>
+          </div>
+          <h3>2. 接続</h3>
+          <p class="hint">ワイヤレスデバッグ画面の「IP アドレスとポート」を入力します（ペア設定用とは別のポートです）。</p>
+          <div class="row">
+            <input id="connect-host" placeholder="192.168.1.20:41234" spellcheck="false" />
+            <button id="connect-btn">接続</button>
+          </div>
+          <button id="disconnect-btn" hidden>選択中のワイヤレス端末を切断</button>
+        </details>
         <details id="setup">
           <summary>端末セットアップ</summary>
           <p class="hint">APK のパスを指定するとインストールも行います。空欄なら権限付与と「仮の現在地情報アプリ」設定のみ。</p>
